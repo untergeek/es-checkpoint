@@ -1,0 +1,9 @@
+{
+    "mypy-type-checker.importStrategy": "useBundled",
+    "black-formatter.importStrategy": "useBundled",
+    "pylint.importStrategy": "useBundled",
+    "pylint.args": [
+        "--disable=E1205,W1203"
+    ],
+    "editor.defaultFormatter": null
+}

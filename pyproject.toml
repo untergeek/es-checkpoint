@@ -1,0 +1,92 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "es-checkpoint"
+dynamic = ["version"]
+description = 'Track progress in an Elasticsearch index'
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text='Apache-2.0' }
+keywords = []
+authors = [
+  { name = "Aaron Mildenstein", email = "aaron@mildensteins.com" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "dotmap==1.3.30",
+    "elasticsearch8>=8.17.0",
+    "tiered_debug==1.1.0",
+]
+
+[project.urls]
+Documentation = "https://github.com/untergeek/es-checkpoint#readme"
+Issues = "https://github.com/untergeek/es-checkpoint/issues"
+Source = "https://github.com/untergeek/es-checkpoint"
+
+[tool.hatch.version]
+path = "src/es_checkpoint/__init__.py"
+
+[tool.pytest.ini_options]
+pythonpath = ['.', 'src/es_checkpoint']
+minversion = '7.2'
+addopts = '-ra -q'
+testpaths = [
+    'tests/unit',
+    'tests/integration',
+]
+
+# Lint environment
+[tool.hatch.envs.lint.scripts]
+run-black = 'black --quiet --check --diff {args:.}'
+python = ['run-black']
+all = ['python', 'templates']
+
+[tool.hatch.envs.lint]
+detached = true
+dependencies = [
+  'black>=23.1.0',
+  'mypy>=1.0.0',
+]
+
+[tool.pylint.format]
+max-line-length = "88"
+
+[tool.black]
+target-version = ['py38']
+line-length = 88
+skip-string-normalization = true
+include = '\.pyi?$'
+
+# Test environment
+[[tool.hatch.envs.test.matrix]]
+python = ['3.8', '3.9', '3.10', '3.11', '3.12']
+
+
+[tool.coverage.run]
+source_pkgs = ["es_checkpoint", "tests"]
+branch = true
+parallel = true
+omit = [
+  "src/es_checkpoint/__about__.py",
+]
+
+[tool.coverage.paths]
+es_checkpoint = ["src/es_checkpoint", "*/es-checkpoint/src/es_checkpoint"]
+tests = ["tests", "*/es-checkpoint/tests"]
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]
