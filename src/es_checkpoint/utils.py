@@ -1,74 +1,55 @@
 """es-checkpoint utils module.
 
-Provides utility functions for Elasticsearch operations and progress tracking.
+Provides utility functions for storage operations and progress tracking.
 """
 
-# pylint: disable=W0212
 import typing as t
 from datetime import datetime, timezone
 import json
 import logging
-from elasticsearch8.exceptions import (
-    ApiError,
-    BadRequestError,
-    NotFoundError,
-    TransportError,
-)
-from .tools.decorators import try_except
-from .tools.handlers import es_response, missing_handler, tracker_handler
 from .debug import debug, begin_end
-from .exceptions import ClientError, FatalError, MissingIndex, MissingDocument
+from .exceptions import FatalError, MissingDocument
+from .storage import StorageBackend
 
 logger = logging.getLogger(__name__)
 
 if t.TYPE_CHECKING:
-    from elasticsearch8 import Elasticsearch
-    from elastic_transport import HeadApiResponse
     from . import Job, Task
 
-EsExceptions = (ApiError, TransportError, BadRequestError)
-Missing = (NotFoundError, MissingIndex, MissingDocument)
 
-
-@try_except(exceptions=EsExceptions, handler=es_response)
 @begin_end()
 def do_search(
-    client: "Elasticsearch",
+    backend: StorageBackend,
     index_pattern: str,
     query: t.Dict,
     size: int = 0,
     aggs: t.Optional[t.Dict] = None,
-) -> t.Dict:
-    """Performs a search query against an Elasticsearch index pattern.
+) -> t.List[t.Dict]:
+    """Performs a search query against a storage backend.
 
     Args:
-        client: Elasticsearch client connection.
+        backend: Storage backend for document operations.
         index_pattern: Index name, CSV list, or pattern.
-        query: Elasticsearch DSL search query.
+        query: Search query in backend-specific format.
         size: Maximum number of results (default: 0).
         aggs: Optional aggregation query (default: None).
 
     Returns:
-        dict: Search response from Elasticsearch.
+        list[dict]: List of matching documents.
 
     Examples:
         >>> from unittest.mock import Mock
-        >>> client = Mock()
-        >>> client.search.return_value = {"hits": {"total": {"value": 1}}}
-        >>> result = do_search(client, "test_idx", {"query": {"match_all": {}}})
-        >>> result["hits"]["total"]["value"]
+        >>> backend = Mock()
+        >>> backend.search.return_value = [{"field": "value"}]
+        >>> results = do_search(backend, "test_idx", {"query": {"match_all": {}}})
+        >>> len(results)
         1
+        >>> results[0]["field"]
+        'value'
     """
-    kwargs = {
-        "index": index_pattern,
-        "query": query,
-        "size": size,
-        "expand_wildcards": ["open", "hidden"],
-    }
-    if aggs:
-        kwargs.update({"aggs": aggs})
-    debug.lv5(f"Search kwargs = {kwargs}")
-    response = dict(client.search(**kwargs))
+    debug.lv5(f"Search query = {query}")
+    kwargs = {"aggs": aggs} if aggs else {}
+    response = backend.search(index_pattern, query, size, **kwargs)
     debug.lv5(f"Return value = {response}")
     return response
 
@@ -126,40 +107,34 @@ def config_fieldmap(
     return which[rw_val][key]
 
 
-@try_except(exceptions=EsExceptions, handler=es_response)
 @begin_end()
 def create_index(
-    client: "Elasticsearch",
+    backend: StorageBackend,
     name: str,
     mappings: t.Union[t.Dict, None] = None,
     settings: t.Union[t.Dict, None] = None,
 ) -> None:
-    """Creates an Elasticsearch index with mappings and settings.
+    """Ensures an index exists in the storage backend.
 
     Args:
-        client: Elasticsearch client connection.
+        backend: Storage backend for document operations.
         name: Index name.
         mappings: Index mappings (default: None).
         settings: Index settings (default: None).
 
     Examples:
         >>> from unittest.mock import Mock
-        >>> client = Mock()
-        >>> client.indices.exists.return_value = False
-        >>> client.indices.create.return_value = {"acknowledged": True}
-        >>> create_index(client, "test_idx")
-        >>> client.indices.create.called
+        >>> backend = Mock()
+        >>> backend.ensure_index.return_value = None
+        >>> create_index(backend, "test_idx")
+        >>> backend.ensure_index.called
         True
     """
     debug.lv3(f"Creating index: {name}")
-    if index_exists(client, name):
-        debug.lv3(f"Index {name} already exists")
-        return
-    response = client.indices.create(index=name, settings=settings, mappings=mappings)
-    debug.lv5(f"indices.create response: {response}")
+    backend.ensure_index(name, mappings=mappings, settings=settings)
+    debug.lv5(f"Index {name} ensured")
 
 
-@try_except(exceptions=(FatalError, ValueError), handler=tracker_handler)
 @begin_end()
 def get_progress_doc(
     job: t.Optional["Job"] = None,
@@ -184,8 +159,9 @@ def get_progress_doc(
 
     Examples:
         >>> from unittest.mock import Mock
-        >>> job = Mock(client=Mock(), tracking_index="idx", name="job1")
-        >>> job.client.get.return_value = {"_source": {"task": "task1"}}
+        >>> backend = Mock()
+        >>> backend.get.return_value = {"task": "task1"}
+        >>> job = Mock(backend=backend, tracking_index="idx", name="job1")
         >>> get_progress_doc(job=job, task_id="task1")
         {'task': 'task1'}
     """
@@ -211,22 +187,20 @@ def get_progress_doc(
             msg = "No value provided for stepname"
             logger.critical(msg)
             raise ValueError(msg)
-    client = job.client
+    backend = job.backend
     tracking_idx = job.tracking_index
     job_id = job.name
-    retval = progress_doc_req(client, tracking_idx, job_id, task_id, stepname=stepname)
+    retval = progress_doc_req(backend, tracking_idx, job_id, task_id, stepname=stepname)
     debug.lv5(f"Return value = {retval}")
     return retval
 
 
-@try_except(exceptions=EsExceptions, handler=es_response)
-@try_except(exceptions=Missing, handler=missing_handler)
 @begin_end()
-def get_tracking_doc(client: "Elasticsearch", name: str, job_id: str) -> t.Dict:
+def get_tracking_doc(backend: StorageBackend, name: str, job_id: str) -> t.Dict:
     """Retrieves a progress tracking document for a job.
 
     Args:
-        client: Elasticsearch client connection.
+        backend: Storage backend for document operations.
         name: Tracking index name.
         job_id: Job ID for the tracking document.
 
@@ -235,35 +209,26 @@ def get_tracking_doc(client: "Elasticsearch", name: str, job_id: str) -> t.Dict:
 
     Raises:
         MissingIndex: If the tracking index does not exist.
+        MissingDocument: If the document is not found.
 
     Examples:
         >>> from unittest.mock import Mock
-        >>> client = Mock()
-        >>> client.get.return_value = {"_source": {"job": "job1"}}
-        >>> client.indices.exists.return_value = True
-        >>> get_tracking_doc(client, "es-checkpoint", "job1")
+        >>> backend = Mock()
+        >>> backend.get.return_value = {"job": "job1"}
+        >>> get_tracking_doc(backend, "es-checkpoint", "job1")
         {'job': 'job1'}
     """
     debug.lv3(f"Getting tracking doc for {job_id}...")
-    if not index_exists(client, name):
-        msg = f"Tracking index {name} is missing"
+    try:
+        doc = backend.get(name, job_id)
+        debug.lv5(f"backend.get response: {doc}")
+        return doc
+    except MissingDocument as err:
+        msg = f"Tracking document for {job_id} does not exist"
         logger.critical(msg)
         debug.lv3("Exiting function, raising exception")
         debug.lv5(f"Exception: {msg}")
-        raise MissingIndex(msg, index=name)
-    doc = dict(client.get(index=name, id=job_id))
-    debug.lv5(f"client.get response: {doc}")
-    retval = doc["_source"]
-    debug.lv5(f"Return value = {retval}")
-    return retval
-
-
-def index_exists(client: "Elasticsearch", name: str) -> "HeadApiResponse":
-    """Tests whether an index exists."""
-    debug.lv3(f"Checking if index {name} exists...")
-    retval = client.indices.exists(index=name, expand_wildcards=["open", "hidden"])
-    debug.lv5(f"Return value = {retval}")
-    return retval
+        raise MissingDocument(msg, index=name) from err
 
 
 @begin_end(begin=5, end=5)
@@ -289,10 +254,9 @@ def now_iso8601() -> str:
     return f"{parts[0]}+{parts[1]}"
 
 
-@try_except(exceptions=Missing, handler=missing_handler)
 @begin_end()
 def progress_doc_req(
-    client: "Elasticsearch",
+    backend: StorageBackend,
     name: str,
     job_id: str,
     task_id: str,
@@ -301,7 +265,7 @@ def progress_doc_req(
     """Retrieves a task or step tracking document.
 
     Args:
-        client: Elasticsearch client connection.
+        backend: Storage backend for document operations.
         name: Tracking index name.
         job_id: Job name for the tracking run.
         task_id: Task ID for the tracking document.
@@ -317,24 +281,12 @@ def progress_doc_req(
 
     Examples:
         >>> from unittest.mock import Mock
-        >>> client = Mock()
-        >>> client.indices.exists.return_value = True
-        >>> client.search.return_value = {
-        ...     "hits": {
-        ...         "total": {"value": 1},
-        ...         "hits": [{"_source": {"task": "task1"}}]
-        ...     }
-        ... }
-        >>> progress_doc_req(client, "es-checkpoint", "job1", "task1")
+        >>> backend = Mock()
+        >>> backend.search.return_value = [{"_source": {"task": "task1"}}]
+        >>> progress_doc_req(backend, "es-checkpoint", "job1", "task1")
         {'_source': {'task': 'task1'}}
     """
     debug.lv3(f"Getting progress doc for {name}...")
-    if not index_exists(client, name):
-        msg = f"Tracking index {name} is missing"
-        logger.critical(msg)
-        debug.lv3("Exiting function, raising exception")
-        debug.lv5(f"Exception: {msg}")
-        raise MissingIndex(msg, index=name)
     stub = f"Task: {task_id} of Job: {job_id}"
     query = {
         "bool": {
@@ -355,20 +307,20 @@ def progress_doc_req(
         filters.append({"term": {"step": stepname}})
     query["bool"]["filter"] = filters
     debug.lv4(f"Getting progress doc for {name} with query: {query}")
-    result = do_search(client, index_pattern=name, query=query)
+    result = do_search(backend, name, query)
     debug.lv5(f"do_search result: {result}")
-    if result["hits"]["total"]["value"] > 1:
+    if len(result) > 1:
         msg = f"Tracking document for {stub} is not unique. This should never happen."
         logger.critical(msg)
         debug.lv3("Exiting function, raising exception")
         debug.lv5(f"Exception: {msg}")
         raise FatalError(msg)
-    if result["hits"]["total"]["value"] != 1:
+    if not result:
         msg = f"Tracking document for {stub} does not exist"
         debug.lv3("Exiting function, raising exception")
         debug.lv5(f"Exception: {msg}")
         raise MissingDocument(msg, index=name)
-    retval = result["hits"]["hits"][0]
+    retval = result[0]
     debug.lv5(f"Return value = {retval}")
     return retval
 
@@ -408,66 +360,3 @@ def parse_job_config(config: t.Dict, behavior: t.Literal["read", "write"]) -> t.
             doc[field] = func(config[field])
     debug.lv5(f"Return value = {doc}")
     return doc
-
-
-@begin_end()
-def update_doc(
-    client: "Elasticsearch",
-    index: str,
-    doc_id: str,
-    doc: t.Dict,
-    routing: int = 0,
-) -> None:
-    """Upserts a document in an Elasticsearch index.
-
-    Args:
-        client: Elasticsearch client connection.
-        index: Index to write to.
-        doc_id: Document ID to update.
-        doc: Document contents.
-        routing: Routing value for parent/child relationships (default: 0).
-
-    Raises:
-        MissingIndex: If the index does not exist.
-        ClientError: If the update operation fails.
-
-    Examples:
-        >>> from unittest.mock import Mock
-        >>> client = Mock()
-        >>> client.indices.exists.return_value = True
-        >>> client.update.return_value = {"result": "updated"}
-        >>> update_doc(client, "es-checkpoint", "doc1", {"field": "value"})
-        >>> client.update.called
-        True
-    """
-    if doc_id:
-        debug.lv3(f"Updating document {doc_id} in index {index}")
-    if not index_exists(client, index):
-        msg = f"Index {index} does not exist"
-        logger.critical(msg)
-        debug.lv3("Exiting function, raising exception")
-        debug.lv5(f"Exception: {msg}")
-        raise MissingIndex(msg, index=index)
-    try:
-        debug.lv4("TRY: client.update()")
-        if doc_id:
-            _ = client.update(
-                index=index,
-                id=doc_id,
-                doc=doc,
-                doc_as_upsert=True,
-                routing=str(routing),
-                refresh=True,
-            )
-            debug.lv5(f"document update response: {_}")
-        else:
-            debug.lv5("No value for document id. Creating new document.")
-            _ = client.index(
-                index=index, document=doc, routing=str(routing), refresh=True
-            )
-    except (ApiError, TransportError, BadRequestError) as err:
-        msg = f"Error updating document: {err.args[0]}"
-        logger.error(msg)
-        debug.lv3("Exiting function, raising exception")
-        debug.lv5(f"Exception: {msg}")
-        raise ClientError(msg, errors=err) from err

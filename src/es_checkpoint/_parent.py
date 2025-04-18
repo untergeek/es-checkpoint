@@ -9,12 +9,12 @@ import logging
 import typing as t
 from .debug import debug, begin_end
 from .exceptions import MissingDocument, FatalError
-from .utils import now_iso8601, update_doc, get_progress_doc
+from .storage import StorageBackend
+from .utils import now_iso8601, get_progress_doc
 
 logger = logging.getLogger(__name__)
 
 if t.TYPE_CHECKING:
-    from elasticsearch8 import Elasticsearch
     from .job import Job
 
 
@@ -24,33 +24,33 @@ class Trackable(ABC):
 
     def __init__(
         self,
-        client: "Elasticsearch",
+        backend: StorageBackend,
         tracking_index: str,
         doc_id: t.Optional[str] = None,
     ):
         """Initializes a Trackable object for progress tracking.
 
         Args:
-            client: Elasticsearch client connection.
-            tracking_index: Name of the tracking index.
-            doc_id: Document ID in the tracking index (default: None).
+            backend: Storage backend for document operations.
+            tracking_index: Name of the tracking index or container.
+            doc_id: Document ID in the storage backend (default: None).
 
         Examples:
             >>> from unittest.mock import Mock
-            >>> client = Mock()
-            >>> tracker = Trackable(client, "es-checkpoint", "doc1")
+            >>> backend = Mock()
+            >>> tracker = Trackable(backend, "es-checkpoint", "doc1")
             >>> tracker.tracking_index
             'es-checkpoint'
             >>> tracker.doc_id
             'doc1'
         """
-        #: Elasticsearch client
-        self.client = client
+        #: StorageBackend: Backend for document operations
+        self.backend = backend
         #: Name of the tracking index
         self.tracking_index = tracking_index
-        #: Document ID in Elasticsearch
+        #: Document ID in the storage backend
         self.doc_id = doc_id
-        #: Status from Elasticsearch
+        #: Status from storage backend
         self.status: t.Dict = {}
         #: List of log messages
         self.logs: t.List = []
@@ -265,7 +265,7 @@ class Trackable(ABC):
         except Exception as exc:
             debug.lv3("Exiting function, raising exception")
             debug.lv5(f"Exception: {exc}")
-            msg = "Error in generic_get"
+            msg = "Error in storage operation"
             logger.error(f"{msg}: {exc}")
             raise FatalError(msg, errors=exc) from exc
         debug.lv5(f"Return value = {result}")
@@ -309,28 +309,25 @@ class Trackable(ABC):
 
     @begin_end()
     def record(self):
-        """Saves the current status to the tracking index.
+        """Saves the current status to the storage backend.
 
         Examples:
             >>> from unittest.mock import Mock
-            >>> client = Mock()
-            >>> tracker = Trackable(client, "es-checkpoint", "doc1")
+            >>> backend = Mock()
+            >>> backend.save.return_value = "doc1"
+            >>> tracker = Trackable(backend, "es-checkpoint")
             >>> tracker.build_doc = Mock(return_value={"field": "value"})
-            >>> client.update = Mock()
             >>> tracker.record()
-            >>> client.update.called
+            >>> backend.save.called
             True
+            >>> tracker.doc_id
+            'doc1'
         """
         doc = self.build_doc()
         if self.doc_id:
-            args = (self.client, self.tracking_index, self.doc_id, doc)
-            fn = update_doc
-            _ = self.fn_result(fn, args=args)
+            self.backend.save(self.tracking_index, self.doc_id, doc)
         else:
-            kwargs = {"index": self.tracking_index, "document": doc}
-            fn = self.client.index
-            response = self.fn_result(fn, kwargs=kwargs)
-            self.doc_id = response["_id"]
+            self.doc_id = self.backend.save(self.tracking_index, None, doc)
 
     @begin_end()
     def report_history(self) -> None:
@@ -386,7 +383,7 @@ class TaskOrStep(Trackable):
 
         Examples:
             >>> from unittest.mock import Mock
-            >>> job = Mock(client=Mock(), tracking_index="es-checkpoint", name="job1")
+            >>> job = Mock(backend=Mock(), tracking_index="es-checkpoint", name="job1")
             >>> task = TaskOrStep(job, "test_idx")
             >>> task.index
             'test_idx'
@@ -394,7 +391,7 @@ class TaskOrStep(Trackable):
             'job1'
         """
         debug.lv2("Initializing Task object")
-        super().__init__(job.client, job.tracking_index)
+        super().__init__(job.backend, job.tracking_index)
         self.job = job
         self.index = index
         self.stub = f"Job: {job.name}"
@@ -411,7 +408,7 @@ class TaskOrStep(Trackable):
 
         Examples:
             >>> from unittest.mock import Mock
-            >>> job = Mock(client=Mock(), tracking_index="es-checkpoint", name="job1")
+            >>> job = Mock(backend=Mock(), tracking_index="es-checkpoint", name="job1")
             >>> task = TaskOrStep(job, "test_idx")
             >>> task.task_id = "task1"
             >>> task.stepname = "step1"
@@ -437,21 +434,18 @@ class TaskOrStep(Trackable):
 
     @begin_end()
     def get_history(self):
-        """Retrieves the history of a task or step from the tracking index.
+        """Retrieves the history of a task or step from the storage backend.
 
         Uses job name and task ID to fetch previous run data, updating status.
 
         Examples:
             >>> from unittest.mock import Mock
-            >>> job = Mock(client=Mock(), tracking_index="es-checkpoint", name="job1")
+            >>> backend = Mock()
+            >>> backend.search.return_value = [{"completed": True}]
+            >>> job = Mock(backend=backend, tracking_index="es-checkpoint", name="job1")
             >>> task = TaskOrStep(job, "test_idx")
             >>> task.task_id = "task1"
-            >>> task.fn_result = Mock(
-            ...     return_value={"_id": "doc1", "_source": {"completed": True}}
-            ... )
             >>> task.get_history()
-            >>> task.doc_id
-            'doc1'
             >>> task.status["completed"]
             True
         """

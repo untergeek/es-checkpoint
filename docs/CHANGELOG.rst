@@ -3,6 +3,51 @@ Changelog
 
 All notable changes to the `es-checkpoint` module are documented here.
 
+0.0.10 (2025-04-18)
+-------------------
+
+Added
+~~~~~
+- Abstract storage backend in ``storage.py`` with ``StorageBackend`` base class
+  and concrete implementations: ``ElasticsearchBackend`` for Elasticsearch,
+  ``FileBackend`` for local JSON file storage, and ``InMemoryBackend`` for testing.
+- ``update_status`` and ``get_status`` methods in ``Step`` to manage step status
+  (e.g., "running", "completed") in the storage backend.
+- Enhanced docstrings in ``step.py`` with detailed ``Attributes`` and ``Examples``
+  sections, emphasizing storage backend usage.
+
+Changed
+~~~~~~~
+- Replaced Elasticsearch ``client`` with ``StorageBackend`` in ``_parent.py``,
+  ``job.py``, ``task.py``, ``step.py``, and ``utils.py``, enabling flexible storage
+  backends (e.g., file, in-memory).
+- Refactored ``utils.py`` to use ``StorageBackend`` methods (``get``, ``search``,
+  ``ensure_index``) in ``do_search``, ``create_index``, ``get_progress_doc``,
+  ``get_tracking_doc``, and ``progress_doc_req``.
+- Removed ``index_exists`` and ``update_doc`` from ``utils.py``, as
+  ``StorageBackend.ensure_index`` and ``save`` handle these operations.
+- Updated doctests to mock ``StorageBackend`` instead of ``Elasticsearch`` across
+  all modified files, ensuring backend-agnostic testing.
+- Fixed doctest line length in ``job.py`` (``get_history``) for 80/88-character
+  compliance.
+- Removed unused ``ClientError`` and ``MissingIndex`` imports in ``utils.py`` for
+  cleaner code.
+- Incremented version to ``0.0.10`` in ``__init__.py`` to reflect storage backend
+  abstraction.
+
+Removed
+~~~~~~~
+- Elasticsearch-specific dependencies (e.g., ``elasticsearch8.exceptions``) from
+  ``utils.py`` and ``job.py``, replaced by ``StorageBackend`` interface.
+
+Notes
+~~~~~
+- The storage backend abstraction enables tracking in Elasticsearch, local files,
+  or in-memory storage, enhancing flexibility for new use cases.
+- Pending tasks include testing the storage backends, creating ``index.rst`` and
+  ``_templates`` for ReadTheDocs, and removing obsolete files (``_child.py``,
+  ``_base.py``).
+
 0.0.9 (2025-04-18)
 ------------------
 

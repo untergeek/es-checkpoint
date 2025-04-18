@@ -12,15 +12,10 @@ from .tools.decorators import try_except
 from .debug import debug, begin_end
 from .defaults import index_settings, status_mappings
 from .exceptions import ClientError, FatalError
-from .utils import (
-    create_index,
-    get_tracking_doc,
-    index_exists,
-    parse_job_config,
-)
+from .utils import create_index, get_tracking_doc, parse_job_config
 
 if t.TYPE_CHECKING:
-    from elasticsearch8 import Elasticsearch
+    from .storage import StorageBackend
 
 logger = logging.getLogger(__name__)
 
@@ -28,32 +23,32 @@ logger = logging.getLogger(__name__)
 class Job(Trackable):
     def __init__(
         self,
-        client: "Elasticsearch",
+        backend: "StorageBackend",
         tracking_index: str,
         name: str,
         config: t.Dict,
         dry_run: bool = False,
     ):
-        """Initializes a Job for tracking Elasticsearch operations.
+        """Initializes a Job for tracking operations.
 
         Args:
-            client: Elasticsearch client connection.
-            tracking_index: Name of the tracking index.
+            backend: Storage backend for document operations.
+            tracking_index: Name of the tracking index or container.
             name: Unique name for the job.
             config: Configuration dictionary for the job.
             dry_run: If True, simulates operations without changes (default: False).
 
         Examples:
             >>> from unittest.mock import Mock
-            >>> client = Mock()
-            >>> job = Job(client, "es-checkpoint", "test_job", {}, dry_run=True)
+            >>> backend = Mock()
+            >>> job = Job(backend, "es-checkpoint", "test_job", {}, dry_run=True)
             >>> job.name
             'test_job'
             >>> job.dry_run
             True
         """
         debug.lv2("Initializing Job object")
-        super().__init__(client, tracking_index, doc_id=name)
+        super().__init__(backend, tracking_index, doc_id=name)
         #: str: Tracker stub
         self.stub = name
         #: str: Name of the job
@@ -89,8 +84,8 @@ class Job(Trackable):
 
         Examples:
             >>> from unittest.mock import Mock
-            >>> client = Mock()
-            >>> job = Job(client, "es-checkpoint", "test_job", {"query": {}})
+            >>> backend = Mock()
+            >>> job = Job(backend, "es-checkpoint", "test_job", {"query": {}})
             >>> fields = job.extra_fields()
             >>> fields["job"]
             'test_job'
@@ -117,16 +112,18 @@ class Job(Trackable):
 
         Examples:
             >>> from unittest.mock import Mock
-            >>> client = Mock()
-            >>> job = Job(client, "es-checkpoint", "test_job", {"query": {}})
-            >>> job.fn_result = Mock(return_value={"_source": {"config": {"query": '{"match_all": {}}'}, "dry_run": True}})
+            >>> backend = Mock()
+            >>> backend.get.return_value = {
+            ...     "config": {"query": '{"match_all": {}}'}, "dry_run": True
+            ... }
+            >>> job = Job(backend, "es-checkpoint", "test_job", {"query": {}})
             >>> job.get_history()
             >>> job.prev_dry_run
             True
             >>> job.config
             {'query': {'match_all': {}}}
         """
-        args = (self.client, self.tracking_index, self.name)
+        args = (self.backend, self.tracking_index, self.name)
         fn = get_tracking_doc
         debug.lv4("TRY: get_tracking_doc()")
         result = self.fn_result(fn, args=args)
@@ -151,22 +148,19 @@ class Job(Trackable):
 
     @begin_end()
     def chk_idx(self) -> None:
-        """Checks if the tracking index exists, creating it if necessary.
+        """Ensures the tracking index exists, creating it if necessary.
 
         Examples:
             >>> from unittest.mock import Mock
-            >>> client = Mock()
-            >>> client.indices.exists.return_value = False
-            >>> job = Job(client, "es-checkpoint", "test_job", {})
-            >>> job.mk_idx = Mock()
+            >>> backend = Mock()
+            >>> backend.ensure_index.return_value = None
+            >>> job = Job(backend, "es-checkpoint", "test_job", {})
             >>> job.chk_idx()
-            >>> job.mk_idx.called
+            >>> backend.ensure_index.called
             True
         """
         debug.lv2("BEGIN chk_idx()")
-        args = (self.client, self.tracking_index)
-        if not index_exists(*args):
-            self.mk_idx()
+        create_index(self.backend, self.tracking_index)
 
     @try_except(exceptions=ClientError, use=FatalError)
     @begin_end()
@@ -178,14 +172,14 @@ class Job(Trackable):
 
         Examples:
             >>> from unittest.mock import Mock
-            >>> client = Mock()
-            >>> client.indices.exists.return_value = False
-            >>> job = Job(client, "es-checkpoint", "test_job", {})
+            >>> backend = Mock()
+            >>> backend.ensure_index.return_value = None
+            >>> job = Job(backend, "es-checkpoint", "test_job", {})
             >>> job.mk_idx()
-            >>> client.indices.create.called
+            >>> backend.ensure_index.called
             True
         """
-        args = (self.client, self.tracking_index)
+        args = (self.backend, self.tracking_index)
         kwargs = {"settings": index_settings(), "mappings": status_mappings()}
         debug.lv5(f"Args: {args}, Kwargs: {kwargs}")
         create_index(*args, **kwargs)

@@ -28,7 +28,8 @@ class Task(TaskOrStep):
 
         Examples:
             >>> from unittest.mock import Mock
-            >>> job = Mock(name="job1")
+            >>> backend = Mock()
+            >>> job = Mock(backend=backend, tracking_index="es-checkpoint", name="job1")
             >>> task = Task(job, "test_idx", id_suffix="suffix")
             >>> task.task_id
             'test_idx---suffix'
@@ -76,7 +77,8 @@ class Task(TaskOrStep):
 
         Examples:
             >>> from unittest.mock import Mock
-            >>> job = Mock(name="job1")
+            >>> backend = Mock()
+            >>> job = Mock(backend=backend, tracking_index="es-checkpoint", name="job1")
             >>> task = Task(job, "test_idx", task_id="task1")
             >>> task.data = DotMap({"key": "value"})
             >>> task.is_ilm = True
@@ -108,7 +110,8 @@ class Task(TaskOrStep):
 
         Examples:
             >>> from unittest.mock import Mock
-            >>> job = Mock(name="job1")
+            >>> backend = Mock()
+            >>> job = Mock(backend=backend, tracking_index="es-checkpoint", name="job1")
             >>> task = Task(job, "test_idx", task_id="task1")
             >>> task.data = DotMap({"key": "value"})
             >>> task.add_log = Mock()

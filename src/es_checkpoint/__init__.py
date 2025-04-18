@@ -21,7 +21,7 @@ Examples:
     >>> from es_checkpoint import Job, Task, Step, __version__, __author__
     >>> from es_checkpoint import __copyright__, __license__
     >>> __version__
-    '0.0.9'
+    '0.0.10'
     >>> __author__
     'Aaron Mildenstein'
     >>> __copyright__  # doctest: +ELLIPSIS
@@ -44,7 +44,7 @@ if now.year == FIRST_YEAR:
 else:
     COPYRIGHT_YEARS = f"2025-{now.year}"
 
-__version__ = "0.0.9"
+__version__ = "0.0.10"
 __author__ = "Aaron Mildenstein"
 __copyright__ = f"{COPYRIGHT_YEARS}, {__author__}"
 __license__ = "Apache 2.0"
